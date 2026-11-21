@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+}
+
+:root {
+  --canvas: #f6f4ef;
+  --surface: #ffffff;
+  --surface-muted: #efeae1;
+  --ink: #161514;
+  --ink-muted: #5e5850;
+  --border: #e5dfd4;
+  --brand: #ea580c;
+  --brand-strong: #c2410c;
+}
+
+html,
+body {
+  background-color: var(--canvas);
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Barra de rolagem discreta em filtros horizontais mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Safe area para iPhones com notch/barra inferior */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
