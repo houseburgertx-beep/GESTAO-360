@@ -136,6 +136,24 @@ export interface TakeatCashFlowEntry {
   provider: { id?: number; name?: string } | null;
 }
 
+export interface TakeatCatalogProduct {
+  id: number;
+  name: string;
+  description?: string | null;
+  price: string | number;
+  delivery_price?: string | number | null;
+  available: boolean;
+  available_in_delivery: boolean;
+}
+
+export interface TakeatProductCategory {
+  id: number;
+  name: string;
+  available: boolean;
+  available_in_delivery: boolean;
+  products: TakeatCatalogProduct[];
+}
+
 export class TakeatApiError extends Error {
   status: number;
   code?: string;

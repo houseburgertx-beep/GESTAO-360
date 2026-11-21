@@ -25,9 +25,7 @@ export function NumbersTab() {
   const [closingInput, setClosingInput] = useState(String(state.finance.cmvPeriod.closingStockValue));
 
   const totalWasteMonth = useMemo(() => {
-    const logged = state.wasteLogs.reduce((acc, w) => acc + w.totalCost, 0);
-    // Projeta acumulado do período + novos registros feitos pelo usuário
-    return 1840 + logged;
+    return state.wasteLogs.reduce((acc, w) => acc + w.totalCost, 0);
   }, [state.wasteLogs]);
 
   const cmv = useMemo(() => {
@@ -137,7 +135,14 @@ export function NumbersTab() {
           </div>
           <button
             type="button"
-            onClick={() => setEditingCmv((v) => !v)}
+            onClick={() => {
+              if (!editingCmv) {
+                setOpeningInput(String(state.finance.cmvPeriod.openingStockValue));
+                setPurchasesInput(String(state.finance.cmvPeriod.purchasesValue));
+                setClosingInput(String(state.finance.cmvPeriod.closingStockValue));
+              }
+              setEditingCmv((v) => !v);
+            }}
             className="rounded-xl bg-stone-100 text-stone-800 px-2.5 py-1.5 text-[11px] font-bold"
           >
             {editingCmv ? "Fechar" : "Ajustar Estoque/Compras"}

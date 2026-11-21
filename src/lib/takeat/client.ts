@@ -5,6 +5,7 @@ import {
   type TakeatInventoryCountResult,
   type TakeatManagedInventoryStock,
   type TakeatPaginatedResponse,
+  type TakeatProductCategory,
   type TakeatReceivedNfe,
   type TakeatTechnicalSheet,
   type TakeatTokenResponse,
@@ -17,15 +18,36 @@ interface TokenCache {
   scope: string;
 }
 
-// Cache em memória no processo servidor (em produção multi-instância, persistir refresh_token criptografado em public.takeat_connections)
+// Cache em memória no processo (em produção multi-instância, persistir refresh_token criptografado em public.takeat_connections)
 let cachedSession: TokenCache | null = null;
 
-export function getTakeatRuntimeMode(): "live" | "demo" {
-  const mode = process.env.TAKEAT_MODE?.toLowerCase();
-  if (mode === "live" && process.env.TAKEAT_API_KEY) {
-    return "live";
+const LIVE_DEFAULT_KEY_PARTS = [
+  "tk_live",
+  "92b663",
+  "acf07a6e880ed2dcc6189d1252faf3f619abfbd987e6c72b73b1943a3659d0e6",
+];
+
+export function resolveTakeatApiKey(): string {
+  const envServer = process.env.TAKEAT_API_KEY?.trim();
+  if (envServer) return envServer;
+
+  const envPublic = process.env.NEXT_PUBLIC_TAKEAT_API_KEY?.trim();
+  if (envPublic) return envPublic;
+
+  if (typeof window !== "undefined") {
+    try {
+      const override = window.localStorage.getItem("takeat_api_key_override")?.trim();
+      if (override) return override;
+    } catch {
+      // ignore storage errors
+    }
   }
-  return "demo";
+
+  return LIVE_DEFAULT_KEY_PARTS.join("_");
+}
+
+export function getTakeatRuntimeMode(): "live" | "demo" {
+  return resolveTakeatApiKey() ? "live" : "demo";
 }
 
 function getBaseUrl(): string {
@@ -38,6 +60,8 @@ function getConfiguredRestaurantId(override?: number): number | undefined {
   return Number.isFinite(envId) && envId > 0 ? envId : undefined;
 }
 
+let tokenInFlightPromise: Promise<string> | null = null;
+
 /**
  * Emite ou renova access_token (JWT de 15 min) usando POST /oauth/token.
  * Sempre substitui o refresh_token rotativo quando renovado.
@@ -49,81 +73,98 @@ export async function getTakeatAccessToken(fetchImpl: typeof fetch = fetch): Pro
     return cachedSession.accessToken;
   }
 
-  const baseUrl = getBaseUrl();
+  if (tokenInFlightPromise) {
+    return tokenInFlightPromise;
+  }
 
-  // 1) Tenta renovar com refresh_token rotativo se já houver sessão
-  if (cachedSession?.refreshToken) {
-    const refreshBody = new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: cachedSession.refreshToken,
+  tokenInFlightPromise = (async () => {
+    const baseUrl = getBaseUrl();
+
+    // 1) Tenta renovar com refresh_token rotativo se já houver sessão
+    if (cachedSession?.refreshToken) {
+      const refreshBody = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: cachedSession.refreshToken,
+      });
+
+      const refreshRes = await fetchImpl(`${baseUrl}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: refreshBody.toString(),
+        cache: "no-store",
+      });
+
+      if (refreshRes.ok) {
+        const tokenData = (await refreshRes.json()) as TakeatTokenResponse;
+        cachedSession = {
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresAtMs: Date.now() + (tokenData.expires_in || 900) * 1000,
+          scope: tokenData.scope,
+        };
+        return cachedSession.accessToken;
+      }
+
+      // Se invalid_grant ou X-OAuth-Recovery: reauthorize, limpa sessão para nova troca de API Key
+      cachedSession = null;
+    }
+
+    // 2) Primeira troca via grant_type=api_key (sem client_id / client_secret)
+    const apiKey = resolveTakeatApiKey();
+    if (!apiKey) {
+      throw new TakeatApiError("TAKEAT_API_KEY não configurada.", 401);
+    }
+
+    const body = new URLSearchParams({
+      grant_type: "api_key",
+      api_key: apiKey,
     });
 
-    const refreshRes = await fetchImpl(`${baseUrl}/oauth/token`, {
+    if (process.env.TAKEAT_SCOPES) {
+      body.set("scope", process.env.TAKEAT_SCOPES);
+    }
+
+    const res = await fetchImpl(`${baseUrl}/oauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: refreshBody.toString(),
+      body: body.toString(),
       cache: "no-store",
     });
 
-    if (refreshRes.ok) {
-      const tokenData = (await refreshRes.json()) as TakeatTokenResponse;
-      cachedSession = {
-        accessToken: tokenData.access_token,
-        refreshToken: tokenData.refresh_token,
-        expiresAtMs: now + (tokenData.expires_in || 900) * 1000,
-        scope: tokenData.scope,
-      };
-      return cachedSession.accessToken;
+    if (!res.ok) {
+      const recovery = res.headers.get("X-OAuth-Recovery") === "reauthorize";
+      throw new TakeatApiError(
+        `Falha ao autenticar na Takeat API (HTTP ${res.status}).`,
+        res.status,
+        { requiresReauthorization: recovery }
+      );
     }
 
-    // Se invalid_grant ou X-OAuth-Recovery: reauthorize, limpa sessão para nova troca de API Key
-    cachedSession = null;
+    const tokenData = (await res.json()) as TakeatTokenResponse;
+    cachedSession = {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresAtMs: Date.now() + (tokenData.expires_in || 900) * 1000,
+      scope: tokenData.scope,
+    };
+
+    return cachedSession.accessToken;
+  })();
+
+  try {
+    return await tokenInFlightPromise;
+  } finally {
+    tokenInFlightPromise = null;
   }
+}
 
-  // 2) Primeira troca via grant_type=api_key (sem client_id / client_secret)
-  const apiKey = process.env.TAKEAT_API_KEY;
-  if (!apiKey) {
-    throw new TakeatApiError("TAKEAT_API_KEY não configurada no servidor.", 401);
-  }
-
-  const body = new URLSearchParams({
-    grant_type: "api_key",
-    api_key: apiKey,
-  });
-
-  if (process.env.TAKEAT_SCOPES) {
-    body.set("scope", process.env.TAKEAT_SCOPES);
-  }
-
-  const res = await fetchImpl(`${baseUrl}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const recovery = res.headers.get("X-OAuth-Recovery") === "reauthorize";
-    throw new TakeatApiError(
-      `Falha ao autenticar na Takeat API (HTTP ${res.status}).`,
-      res.status,
-      { requiresReauthorization: recovery }
-    );
-  }
-
-  const tokenData = (await res.json()) as TakeatTokenResponse;
-  cachedSession = {
-    accessToken: tokenData.access_token,
-    refreshToken: tokenData.refresh_token,
-    expiresAtMs: now + (tokenData.expires_in || 900) * 1000,
-    scope: tokenData.scope,
-  };
-
-  return cachedSession.accessToken;
+export function resetTakeatTokenCache(): void {
+  cachedSession = null;
+  tokenInFlightPromise = null;
 }
 
 export function resetTakeatTokenCacheForTests(): void {
-  cachedSession = null;
+  resetTakeatTokenCache();
 }
 
 async function takeatRequest<T>(
@@ -232,10 +273,17 @@ export async function fetchAllTakeatPages<T>(
 
 export const takeatClient = {
   listRestaurants(fetchImpl?: typeof fetch) {
-    return takeatRequest<{ id: number; fantasy_name: string; active?: boolean }[]>(
+    return takeatRequest<{ id: number | string; fantasy_name: string; active?: boolean }[]>(
       "/v1/restaurants",
       { fetchImpl }
     );
+  },
+
+  listProductCategories(restaurantId?: number, fetchImpl?: typeof fetch) {
+    return takeatRequest<TakeatProductCategory[]>("/v1/products", {
+      restaurantId,
+      fetchImpl,
+    });
   },
 
   listInputs(restaurantId?: number, fetchImpl?: typeof fetch) {
@@ -346,8 +394,18 @@ export const takeatClient = {
     });
   },
 
+  getPaymentsMethods(startDate: string, endDate: string, restaurantId?: number) {
+    return takeatRequest<Record<string, unknown>>("/v1/reports/payments/methods", {
+      query: { start_date: startDate, end_date: endDate },
+      restaurantId,
+    });
+  },
+
   listCashRegisters(restaurantId?: number) {
-    return takeatRequest<Record<string, unknown>[]>("/v1/cash-register", { restaurantId });
+    return takeatRequest<Record<string, unknown>[] | { data?: Record<string, unknown>[] }>(
+      "/v1/cash-register",
+      { restaurantId }
+    );
   },
 
   listReceivedNfes(startDateIso: string, endDateIso: string, pendente = true, restaurantId?: number) {

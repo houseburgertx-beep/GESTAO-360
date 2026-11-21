@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getTakeatRuntimeMode, takeatClient } from "@/lib/takeat/client";
+import { takeatClient } from "@/lib/takeat/client";
 
 const availabilitySchema = z.object({
   productId: z.number().int().positive(),
@@ -14,18 +14,6 @@ export async function PATCH(request: Request) {
     parsed = availabilitySchema.parse(await request.json());
   } catch (error) {
     return NextResponse.json({ ok: false, error: "Dados inválidos.", details: String(error) }, { status: 400 });
-  }
-
-  const mode = getTakeatRuntimeMode();
-  if (mode === "demo") {
-    return NextResponse.json({
-      ok: true,
-      mode: "demo",
-      productId: parsed.productId,
-      available: parsed.available,
-      available_in_delivery: parsed.available_in_delivery,
-      updatedAt: new Date().toISOString(),
-    });
   }
 
   try {

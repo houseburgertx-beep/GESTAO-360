@@ -74,8 +74,7 @@ export function InventoryTab({
   // Estado da Contagem Física
   const [blindMode, setBlindMode] = useState(false);
   const [countOnlyCritical, setCountOnlyCritical] = useState(true);
-  const [countReason, setCountReason] = useState("Contagem física de turno · BrassaOps");
-  const [simulate409, setSimulate409] = useState(false);
+  const [countReason, setCountReason] = useState("Contagem física de turno · House 190");
   const [countedDraft, setCountedDraft] = useState<Record<string, string>>({});
   const [countSubmitting, setCountSubmitting] = useState(false);
   const [lastConflictMsg, setLastConflictMsg] = useState<string | null>(null);
@@ -177,15 +176,13 @@ export function InventoryTab({
     const res = await submitStockCount({
       title: countOnlyCritical ? "Contagem Rápida de Críticos" : "Contagem Completa de Estoque",
       blindMode,
-      reason: countReason.trim() || "Contagem física BrassaOps",
-      simulateConflict409: simulate409,
+      reason: countReason.trim() || "Contagem física House 190",
       entries,
     });
     setCountSubmitting(false);
 
     if (res.isConflict409) {
       setLastConflictMsg(res.message);
-      setSimulate409(false);
     } else if (res.ok) {
       setCountedDraft({});
     }
@@ -600,17 +597,6 @@ export function InventoryTab({
                 );
               })}
             </div>
-
-            {state.store.takeatMode === "demo" && (
-              <label className="flex items-center gap-2 text-[11px] text-stone-500">
-                <input
-                  type="checkbox"
-                  checked={simulate409}
-                  onChange={(e) => setSimulate409(e.target.checked)}
-                />
-                Testar proteção contra Conflito HTTP 409 (venda durante contagem)
-              </label>
-            )}
 
             <button
               type="button"

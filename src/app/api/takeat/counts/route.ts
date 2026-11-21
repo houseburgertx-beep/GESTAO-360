@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getTakeatRuntimeMode, takeatClient } from "@/lib/takeat/client";
+import { takeatClient } from "@/lib/takeat/client";
 import { TakeatApiError } from "@/lib/takeat/types";
 
 const countBatchSchema = z.object({
   idempotencyKey: z.string().min(1).max(200),
   reason: z.string().trim().min(1).max(255),
   countedAt: z.string().datetime(),
-  simulateConflict409: z.boolean().optional(),
   items: z
     .array(
       z.object({
@@ -30,40 +29,6 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { ok: false, error: "Payload de contagem inválido.", details: String(error) },
       { status: 400 }
-    );
-  }
-
-  const mode = getTakeatRuntimeMode();
-
-  if (mode === "demo") {
-    if (parsed.simulateConflict409) {
-      return NextResponse.json(
-        {
-          ok: false,
-          isConflict409: true,
-          code: "inventory_update_conflict",
-          error:
-            "HTTP 409: O saldo mudou no Takeat enquanto você contava (houve vendas no PDV). Atualize o saldo atual e revise antes de reenviar.",
-        },
-        { status: 409 }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        ok: true,
-        mode: "demo",
-        idempotencyKey: parsed.idempotencyKey,
-        results: parsed.items.map((item) => ({
-          id: item.takeatId,
-          kind: item.kind,
-          count_id: `demo_${parsed.idempotencyKey}_${item.takeatId}`,
-          quantidade: item.countedQty.toFixed(3),
-          stock_version: String(Number(item.expectedStockVersion) + 1),
-          applied_at: new Date().toISOString(),
-        })),
-      },
-      { status: 201 }
     );
   }
 

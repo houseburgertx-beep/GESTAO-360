@@ -30,13 +30,15 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
     updateStoreConfig,
     addTeamMember,
     syncTakeatNow,
-    resetDemoData,
+    updateTakeatApiKey,
+    resetLocalLogsAndResync,
   } = useApp();
 
   const [storeName, setStoreName] = useState(state.store.name);
   const [dailyGoal, setDailyGoal] = useState(String(state.store.dailyRevenueGoal));
   const [monthlyGoal, setMonthlyGoal] = useState(String(state.store.monthlyRevenueGoal));
   const [cmvTarget, setCmvTarget] = useState(String(state.store.cmvTargetPct));
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [serverStatus, setServerStatus] = useState<{
     mode: string;
     supabaseConfigured: boolean;
@@ -54,18 +56,33 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
     setDailyGoal(String(state.store.dailyRevenueGoal));
     setMonthlyGoal(String(state.store.monthlyRevenueGoal));
     setCmvTarget(String(state.store.cmvTargetPct));
+    try {
+      setApiKeyDraft(window.localStorage.getItem("takeat_api_key_override") || "");
+    } catch {
+      setApiKeyDraft("");
+    }
 
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
     fetch(`${basePath}/api/takeat/status`)
       .then(async (r) => {
         const ct = r.headers.get("content-type") || "";
         if (!r.ok || !ct.includes("application/json")) {
-          return { mode: "demo", supabaseConfigured: false, connected: false };
+          return {
+            mode: state.store.takeatMode,
+            supabaseConfigured: false,
+            connected: state.store.takeatConnected ?? true,
+          };
         }
         return r.json();
       })
       .then((d) => setServerStatus(d))
-      .catch(() => setServerStatus({ mode: "demo", supabaseConfigured: false, connected: false }));
+      .catch(() =>
+        setServerStatus({
+          mode: state.store.takeatMode,
+          supabaseConfigured: false,
+          connected: state.store.takeatConnected ?? true,
+        })
+      );
   }, [open, state.store]);
 
   if (!open) return null;
@@ -85,11 +102,11 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           </button>
         </div>
 
-        {/* Alternador Rápido de Perfil (Demonstração das permissões) */}
+        {/* Alternador Rápido de Perfil */}
         <section className="rounded-2xl bg-white border border-[#E5DFD4] p-4 space-y-2.5">
           <h3 className="text-xs font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
             <Shield className="h-3.5 w-3.5 text-orange-600" />
-            Perfil Ativo (Teste de Permissões)
+            Perfil Operacional Ativo
           </h3>
           <div className="space-y-1.5">
             {state.team.map((member) => {
@@ -118,41 +135,63 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           </div>
         </section>
 
-        {/* Status da Conexão Takeat & Supabase */}
+        {/* Status da Conexão Takeat Oficial */}
         <section className="rounded-2xl bg-white border border-[#E5DFD4] p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
               <Link2 className="h-3.5 w-3.5 text-orange-600" />
-              Conexão API Takeat & Supabase
+              API Oficial Takeat
             </h3>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase whitespace-nowrap shrink-0 ${
-                serverStatus?.mode === "live"
+                state.store.takeatConnected !== false && state.store.takeatMode === "live"
                   ? "bg-emerald-100 text-emerald-800"
-                  : "bg-amber-100 text-amber-900"
+                  : "bg-red-100 text-red-800"
               }`}
             >
-              {serverStatus?.mode === "live" ? "Takeat Live" : "Takeat Demo"}
+              {state.store.takeatConnected !== false ? "Takeat Live" : "Offline / Erro"}
             </span>
           </div>
 
           <div className="rounded-xl bg-stone-50 border border-stone-200 p-3 text-xs space-y-1">
-            <p className="font-bold text-stone-900">{state.store.takeatRestaurantName}</p>
+            <p className="font-bold text-stone-900">
+              {state.store.takeatRestaurantName || `House 190 Eunápolis · #${state.store.takeatRestaurantId || 97686}`}
+            </p>
             <p className="text-stone-600">
               Endpoint: <code className="font-mono">https://public-api.takeat.app</code>
             </p>
             <p className="text-stone-600 flex items-center gap-1">
               <Database className="h-3 w-3 text-stone-500" />
-              Supabase:{" "}
+              Persistência:{" "}
               <strong>
                 {serverStatus?.supabaseConfigured
-                  ? "Conectado (.env.local)"
-                  : "Modo Local/Demo (migrations prontas em /supabase)"}
+                  ? "Supabase + Takeat Live"
+                  : "Aparelho + Takeat Live (Tempo Real)"}
               </strong>
             </p>
-            <p className="text-[11px] text-stone-500 pt-1">
-              Segurança: credenciais Takeat ficam somente no servidor (<code className="font-mono">.env.local</code>), nunca no celular.
-            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold uppercase text-stone-500">
+              Trocar Chave Takeat (opcional · sobrescreve padrão da loja)
+            </label>
+            <div className="flex gap-1.5">
+              <input
+                type="password"
+                value={apiKeyDraft}
+                onChange={(e) => setApiKeyDraft(e.target.value)}
+                placeholder="tk_live_..."
+                className="flex-1 rounded-xl border border-stone-300 bg-white px-2.5 py-2 text-xs font-mono"
+              />
+              <button
+                type="button"
+                disabled={isSyncingTakeat}
+                onClick={() => void updateTakeatApiKey(apiKeyDraft)}
+                className="rounded-xl bg-orange-600 text-white px-3 py-2 text-xs font-extrabold shrink-0"
+              >
+                Aplicar
+              </button>
+            </div>
           </div>
 
           <button
@@ -162,7 +201,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
             className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 text-white py-2.5 text-xs font-extrabold"
           >
             <RefreshCw className={`h-3.5 w-3.5 text-orange-400 ${isSyncingTakeat ? "animate-spin" : ""}`} />
-            Testar Sincronização Takeat Agora
+            Sincronizar Dados Takeat Agora
           </button>
 
           {/* Log de Sincronização */}
@@ -309,14 +348,15 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           </section>
         )}
 
-        {/* Resetar Demo */}
+        {/* Limpar Cache & Ressincronizar */}
         <button
           type="button"
-          onClick={resetDemoData}
+          disabled={isSyncingTakeat}
+          onClick={() => void resetLocalLogsAndResync()}
           className="w-full flex items-center justify-center gap-2 rounded-2xl border border-stone-300 bg-white py-3 text-xs font-bold text-stone-700 hover:bg-stone-100"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-          Restaurar Dados Iniciais de Demonstração
+          Limpar Cache Local e Ressincronizar Takeat
         </button>
       </div>
     </div>

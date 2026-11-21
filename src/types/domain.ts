@@ -27,6 +27,7 @@ export interface StoreConfig {
   min5sScore: number;
   lateEscalationMinutes: number;
   takeatMode: "demo" | "live";
+  takeatConnected?: boolean;
   takeatRestaurantId: number | null;
   takeatRestaurantName: string;
   takeatLastSyncAt: string;

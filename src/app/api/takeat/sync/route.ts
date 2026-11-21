@@ -5,25 +5,9 @@ export async function POST() {
   const mode = getTakeatRuntimeMode();
   const syncedAt = new Date().toISOString();
 
-  if (mode === "demo") {
-    return NextResponse.json({
-      mode: "demo",
-      ok: true,
-      syncedAt,
-      summary: {
-        inputsCount: 11,
-        intermediariesCount: 4,
-        nfesCount: 3,
-        realtimeRevenueChecked: true,
-        kdsChecked: true,
-      },
-      message: "Sincronização simulada concluída (configure TAKEAT_MODE=live e TAKEAT_API_KEY no servidor para produção).",
-    });
-  }
-
   try {
     const today = syncedAt.slice(0, 10);
-    const startWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19);
+    const startWindow = new Date(Date.now() - 85 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19);
     const endWindow = syncedAt.slice(0, 19);
 
     const [inputsPage, intermediariesPage, realtimeToday, nfes, kdsOverview] = await Promise.all([
@@ -35,7 +19,7 @@ export async function POST() {
     ]);
 
     return NextResponse.json({
-      mode: "live",
+      mode,
       ok: true,
       syncedAt,
       complete: inputsPage.complete && intermediariesPage.complete,
@@ -56,6 +40,6 @@ export async function POST() {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro ao sincronizar com a API Takeat.";
-    return NextResponse.json({ mode: "live", ok: false, error: message, syncedAt }, { status: 502 });
+    return NextResponse.json({ mode, ok: false, error: message, syncedAt }, { status: 502 });
   }
 }

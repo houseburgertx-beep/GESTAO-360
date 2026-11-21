@@ -16,40 +16,18 @@ import type {
   TeamMember,
   WasteReason,
 } from "@/types/domain";
-import { createDemoSeedState } from "@/lib/data/demo-seed";
+import { createInitialLiveState } from "@/lib/data/initial-state";
+import { takeatClient, resetTakeatTokenCache } from "@/lib/takeat/client";
+import { syncLiveTakeatIntoState } from "@/lib/takeat/live-sync";
+import { TakeatApiError } from "@/lib/takeat/types";
 import {
   calculateInvisibleDivergence,
   isNumericAnswerOutOfRange,
 } from "@/lib/domain/calculations";
 import { generateId } from "@/lib/utils";
 
-const STORAGE_KEY = "brassaops_state_v1";
-const API_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
-
-/**
- * Executa chamadas ao BFF Takeat com fallback automático para simulação local
- * quando o app estiver rodando em hospedagem estática (ex.: GitHub Pages).
- */
-async function fetchTakeatWithStaticFallback<T>(
-  path: string,
-  init: RequestInit,
-  buildFallback: () => { ok: boolean; status: number; data: T }
-): Promise<{ ok: boolean; status: number; data: T }> {
-  try {
-    const res = await fetch(`${API_BASE_PATH}${path}`, init);
-    const contentType = res.headers.get("content-type") || "";
-    if (res.status === 404 || res.status === 405 || !contentType.includes("application/json")) {
-      return buildFallback();
-    }
-    const data = (await res.json()) as T;
-    return { ok: res.ok, status: res.status, data };
-  } catch (err) {
-    if (err instanceof TypeError || err instanceof SyntaxError) {
-      return buildFallback();
-    }
-    throw err;
-  }
-}
+const STORAGE_KEY = "house190_live_state_v2";
+const LEGACY_STORAGE_KEY = "brassaops_state_v1";
 
 export interface ToastNotice {
   id: string;
@@ -69,10 +47,11 @@ interface AppContextValue {
   switchActiveUser: (userId: string) => void;
   updateStoreConfig: (patch: Partial<StoreConfig>) => void;
   addTeamMember: (member: Omit<TeamMember, "id" | "active">) => void;
-  resetDemoData: () => void;
+  resetLocalLogsAndResync: () => Promise<void>;
 
-  // Integração Takeat (via BFF /api/takeat/*)
+  // Integração Takeat Oficial (https://public-api.takeat.app)
   syncTakeatNow: () => Promise<void>;
+  updateTakeatApiKey: (apiKey: string) => Promise<void>;
   toggleMenuProductAvailability: (
     productId: number,
     channel: "available" | "availableInDelivery"
@@ -107,7 +86,6 @@ interface AppContextValue {
     title: string;
     blindMode: boolean;
     reason: string;
-    simulateConflict409?: boolean;
     entries: { inventoryItemId: string; countedQty: number }[];
   }) => Promise<{ ok: boolean; isConflict409?: boolean; message: string }>;
   createPurchaseOrder: (payload: {
@@ -163,25 +141,86 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>(() => createDemoSeedState());
+  const [state, setState] = useState<AppState>(() => createInitialLiveState());
   const [hydrated, setHydrated] = useState(false);
   const [isSyncingTakeat, setIsSyncingTakeat] = useState(false);
   const [toast, setToast] = useState<ToastNotice | null>(null);
 
-  useEffect(() => {
+  function notify(message: string, tone: ToastNotice["tone"] = "success") {
+    const id = generateId("toast");
+    setToast({ id, tone, message });
+    window.setTimeout(() => {
+      setToast((curr) => (curr?.id === id ? null : curr));
+    }, 3600);
+  }
+
+  async function performLiveSync(baseStateOverride?: AppState, silent = false) {
+    setIsSyncingTakeat(true);
     try {
+      const baseState = baseStateOverride || state;
+      const { nextState, summary } = await syncLiveTakeatIntoState(baseState);
+      setState((curr) => {
+        const root = baseStateOverride || curr;
+        return {
+          ...root,
+          store: nextState.store,
+          suppliers: nextState.suppliers,
+          inventory: nextState.inventory,
+          menuProducts: nextState.menuProducts,
+          receivedNfes: nextState.receivedNfes,
+          cashFlows: nextState.cashFlows,
+          finance: nextState.finance,
+          ratings: nextState.ratings,
+          kds: nextState.kds,
+          syncLogs: [nextState.syncLogs[0], ...root.syncLogs.slice(0, 14)],
+        };
+      });
+      if (!silent) {
+        notify(
+          `Takeat sincronizado: ${summary.inputsCount} insumos, ${summary.productsCount} produtos e ${summary.nfesCount} NF-e.`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro ao conectar à API Takeat.";
+      setState((prev) => ({
+        ...prev,
+        store: { ...prev.store, takeatConnected: false },
+        syncLogs: [
+          {
+            id: generateId("sync"),
+            resource: "SYNC TAKEAT OFICIAL",
+            status: "error",
+            message,
+            at: new Date().toISOString(),
+          },
+          ...prev.syncLogs.slice(0, 14),
+        ],
+      }));
+      notify(message, "error");
+    } finally {
+      setIsSyncingTakeat(false);
+    }
+  }
+
+  useEffect(() => {
+    let initial = createInitialLiveState();
+    try {
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as AppState;
         if (parsed?.store && Array.isArray(parsed.routines) && Array.isArray(parsed.inventory)) {
+          initial = parsed;
           setState(parsed);
         }
       }
     } catch {
-      // Mantém seed inicial se localStorage falhar
+      // Mantém estado inicial limpo se localStorage falhar
     } finally {
       setHydrated(true);
     }
+    void performLiveSync(initial, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -192,14 +231,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Ignora erro de quota
     }
   }, [state, hydrated]);
-
-  function notify(message: string, tone: ToastNotice["tone"] = "success") {
-    const id = generateId("toast");
-    setToast({ id, tone, message });
-    window.setTimeout(() => {
-      setToast((curr) => (curr?.id === id ? null : curr));
-    }, 3600);
-  }
 
   const activeUser = useMemo(() => {
     return state.team.find((m) => m.id === state.activeUserId) || state.team[0];
@@ -231,95 +262,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       notify(`${member.name} adicionado(a) à equipe!`);
     },
 
-    resetDemoData() {
-      const fresh = createDemoSeedState();
+    async resetLocalLogsAndResync() {
+      const fresh = createInitialLiveState();
       setState(fresh);
       try {
+        window.localStorage.removeItem(LEGACY_STORAGE_KEY);
         window.localStorage.removeItem(STORAGE_KEY);
       } catch {
         // ignore
       }
-      notify("Dados de demonstração restaurados!", "info");
+      await performLiveSync(fresh, false);
     },
 
     async syncTakeatNow() {
-      setIsSyncingTakeat(true);
+      await performLiveSync(undefined, false);
+    },
+
+    async updateTakeatApiKey(apiKey: string) {
+      const trimmed = apiKey.trim();
       try {
-        type SyncResp = {
-          ok: boolean;
-          mode?: "demo" | "live";
-          syncedAt?: string;
-          message?: string;
-          error?: string;
-          summary?: { inputsCount: number; intermediariesCount: number; nfesCount: number };
-        };
-        const res = await fetchTakeatWithStaticFallback<SyncResp>(
-          "/api/takeat/sync",
-          { method: "POST" },
-          () => ({
-            ok: true,
-            status: 200,
-            data: {
-              ok: true,
-              mode: "demo",
-              syncedAt: new Date().toISOString(),
-              message: "Sincronização simulada concluída (modo demonstração estático).",
-              summary: {
-                inputsCount: state.inventory.filter((i) => i.kind === "input").length,
-                intermediariesCount: state.inventory.filter((i) => i.kind === "intermediary").length,
-                nfesCount: state.receivedNfes.length,
-              },
-            },
-          })
-        );
-        const data = res.data;
-
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error || "Falha na sincronização Takeat");
+        if (trimmed) {
+          window.localStorage.setItem("takeat_api_key_override", trimmed);
+        } else {
+          window.localStorage.removeItem("takeat_api_key_override");
         }
-
-        const syncedAt = data.syncedAt || new Date().toISOString();
-        setState((prev) => ({
-          ...prev,
-          store: {
-            ...prev.store,
-            takeatMode: data.mode || prev.store.takeatMode,
-            takeatLastSyncAt: syncedAt,
-          },
-          syncLogs: [
-            {
-              id: generateId("sync"),
-              resource: "SYNC FULL (Estoque + NF-e + Vendas Hoje + KDS)",
-              status: "ok",
-              message:
-                data.summary
-                  ? `${data.summary.inputsCount} insumos, ${data.summary.intermediariesCount} intermediários e ${data.summary.nfesCount} NF-e verificados.`
-                  : data.message || "Sincronização concluída.",
-              at: syncedAt,
-            },
-            ...prev.syncLogs.slice(0, 14),
-          ],
-        }));
-        notify("Takeat sincronizado com sucesso!");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Erro ao conectar ao Takeat.";
-        setState((prev) => ({
-          ...prev,
-          syncLogs: [
-            {
-              id: generateId("sync"),
-              resource: "SYNC TAKEAT",
-              status: "error",
-              message,
-              at: new Date().toISOString(),
-            },
-            ...prev.syncLogs.slice(0, 14),
-          ],
-        }));
-        notify(message, "error");
-      } finally {
-        setIsSyncingTakeat(false);
+      } catch {
+        // ignore
       }
+      resetTakeatTokenCache();
+      await performLiveSync(undefined, false);
     },
 
     async toggleMenuProductAvailability(productId, channel) {
@@ -331,20 +302,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         channel === "availableInDelivery" ? !target.availableInDelivery : target.availableInDelivery;
 
       try {
-        const res = await fetchTakeatWithStaticFallback<{ ok: boolean; error?: string }>(
-          "/api/takeat/availability",
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              productId,
-              available: nextAvailable,
-              available_in_delivery: nextDelivery,
-            }),
-          },
-          () => ({ ok: true, status: 200, data: { ok: true } })
-        );
-        if (!res.ok) throw new Error(res.data.error || "Falha ao atualizar disponibilidade no Takeat.");
+        await takeatClient.setProductAvailability(productId, {
+          available: nextAvailable,
+          available_in_delivery: nextDelivery,
+        });
 
         setState((prev) => ({
           ...prev,
@@ -371,7 +332,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           (channel === "available" ? nextAvailable : nextDelivery) ? "success" : "warning"
         );
       } catch (err) {
-        notify(err instanceof Error ? err.message : "Erro ao atualizar cardápio.", "error");
+        notify(err instanceof Error ? err.message : "Erro ao atualizar cardápio no Takeat.", "error");
       }
     },
 
@@ -580,75 +541,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        type CountsResp = {
-          ok: boolean;
-          isConflict409?: boolean;
-          error?: string;
-        };
-        const res = await fetchTakeatWithStaticFallback<CountsResp>(
-          "/api/takeat/counts",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              idempotencyKey,
-              reason: payload.reason,
-              countedAt,
-              simulateConflict409: payload.simulateConflict409,
-              items: itemsMeta.map((m) => ({
-                takeatId: m.inv.takeatId,
-                kind: m.inv.kind,
-                countedQty: m.entry.countedQty,
-                expectedStockVersion: m.inv.stockVersion,
-              })),
-            }),
-          },
-          () => {
-            if (payload.simulateConflict409) {
-              return {
-                ok: false,
-                status: 409,
-                data: {
-                  ok: false,
-                  isConflict409: true,
-                  error:
-                    "HTTP 409 (Simulação): Saldo mudou no Takeat durante a contagem (expected_stock_version expirado). Atualize o saldo antes de reenviar.",
-                },
-              };
-            }
-            return {
-              ok: true,
-              status: 200,
-              data: { ok: true },
-            };
-          }
-        );
-
-        const body = res.data;
-
-        if (res.status === 409 || body.isConflict409) {
-          const msg =
-            body.error ||
-            "HTTP 409: Saldo mudou no Takeat durante a contagem. Atualize e revise manualmente.";
-          setState((prev) => ({
-            ...prev,
-            syncLogs: [
-              {
-                id: generateId("sync"),
-                resource: "POST /v1/inventory/inputs/counts/bulk",
-                status: "conflict_409",
-                message: msg,
-                at: new Date().toISOString(),
-              },
-              ...prev.syncLogs.slice(0, 14),
-            ],
+        const inputItems = itemsMeta
+          .filter((m) => m.inv.kind === "input")
+          .map((m) => ({
+            id: m.inv.takeatId,
+            quantidade: String(m.entry.countedQty),
+            expected_stock_version: m.inv.stockVersion,
+            counted_at: countedAt,
+            reason: payload.reason,
           }));
-          notify(msg, "error");
-          return { ok: false, isConflict409: true, message: msg };
-        }
 
-        if (!res.ok || !body.ok) {
-          throw new Error(body.error || "Erro ao registrar contagem no Takeat.");
+        const intermediaryItems = itemsMeta
+          .filter((m) => m.inv.kind === "intermediary")
+          .map((m) => ({
+            id: m.inv.takeatId,
+            quantidade: String(m.entry.countedQty),
+            expected_stock_version: m.inv.stockVersion,
+            counted_at: countedAt,
+            reason: payload.reason,
+          }));
+
+        const newVersionByTakeatId = new Map<number, string>();
+        if (inputItems.length > 0) {
+          const resp = await takeatClient.registerInputCountsBulk(
+            inputItems,
+            `${idempotencyKey}-inp`
+          );
+          for (const item of resp?.items || []) {
+            if (item.stock_version) newVersionByTakeatId.set(item.id, String(item.stock_version));
+          }
+        }
+        if (intermediaryItems.length > 0) {
+          const resp = await takeatClient.registerIntermediaryCountsBulk(
+            intermediaryItems,
+            `${idempotencyKey}-int`
+          );
+          for (const item of resp?.items || []) {
+            if (item.stock_version) newVersionByTakeatId.set(item.id, String(item.stock_version));
+          }
         }
 
         const totalDivergenceCost = Math.round(
@@ -676,7 +606,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             invisibleDivergenceQty: m.div.invisibleDivergenceQty,
             invisibleDivergenceCost: m.div.invisibleDivergenceCost,
             expectedStockVersion: m.inv.stockVersion,
-            newStockVersion: String(Number(m.inv.stockVersion) + 1),
+            newStockVersion:
+              newVersionByTakeatId.get(m.inv.takeatId) || String(Number(m.inv.stockVersion) + 1),
             status: "synced",
           })),
         };
@@ -690,7 +621,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return {
               ...inv,
               quantity: updatedQtyById.get(inv.id)!,
-              stockVersion: String(Number(inv.stockVersion) + 1),
+              stockVersion:
+                newVersionByTakeatId.get(inv.takeatId) || String(Number(inv.stockVersion) + 1),
             };
           }),
           stockCounts: [countRecord, ...prev.stockCounts],
@@ -710,7 +642,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         notify(successMsg);
         return { ok: true, message: successMsg };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Erro ao enviar contagem.";
+        if (err instanceof TakeatApiError && err.isConflict409) {
+          const msg =
+            err.message ||
+            "HTTP 409: Saldo mudou no Takeat durante a contagem. Atualize e revise manualmente.";
+          setState((prev) => ({
+            ...prev,
+            syncLogs: [
+              {
+                id: generateId("sync"),
+                resource: "POST /v1/inventory/*/counts/bulk",
+                status: "conflict_409",
+                message: msg,
+                at: new Date().toISOString(),
+              },
+              ...prev.syncLogs.slice(0, 14),
+            ],
+          }));
+          notify(msg, "error");
+          return { ok: false, isConflict409: true, message: msg };
+        }
+        const msg = err instanceof Error ? err.message : "Erro ao enviar contagem ao Takeat.";
+        setState((prev) => ({
+          ...prev,
+          syncLogs: [
+            {
+              id: generateId("sync"),
+              resource: "POST /v1/inventory/*/counts/bulk",
+              status: "error",
+              message: msg,
+              at: new Date().toISOString(),
+            },
+            ...prev.syncLogs.slice(0, 14),
+          ],
+        }));
         notify(msg, "error");
         return { ok: false, message: msg };
       }
