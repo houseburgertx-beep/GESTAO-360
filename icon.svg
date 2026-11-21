@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1C1917"/>
+      <stop offset="100%" stop-color="#0C0A09"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FDBA74"/>
+      <stop offset="50%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="196" fill="none" stroke="#F97316" stroke-opacity="0.22" stroke-width="10"/>
+  <!-- Top bun -->
+  <path d="M126 232c0-66 58-108 130-108s130 42 130 108c0 12-10 22-22 22H148c-12 0-22-10-22-22z" fill="url(#flame)"/>
+  <!-- Sesame dots -->
+  <ellipse cx="204" cy="176" rx="10" ry="6" transform="rotate(-18 204 176)" fill="#FFF7ED" opacity="0.9"/>
+  <ellipse cx="256" cy="162" rx="10" ry="6" fill="#FFF7ED" opacity="0.9"/>
+  <ellipse cx="308" cy="176" rx="10" ry="6" transform="rotate(18 308 176)" fill="#FFF7ED" opacity="0.9"/>
+  <!-- Cheese wave -->
+  <path d="M118 274h276l-36 32-34-20-34 24-34-24-34 24-34-20-34 20-36-36z" fill="#FACC15"/>
+  <!-- Patty -->
+  <rect x="114" y="294" width="284" height="44" rx="22" fill="#7C2D12"/>
+  <!-- Bottom bun -->
+  <path d="M132 354h248c10 0 18 8 18 18v6c0 24-20 44-44 44H158c-24 0-44-20-44-44v-6c0-10 8-18 18-18z" fill="#EA580C"/>
+  <!-- Checkmark badge -->
+  <circle cx="384" cy="134" r="56" fill="#10B981" stroke="#141416" stroke-width="12"/>
+  <path d="M358 134l18 18 34-36" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
