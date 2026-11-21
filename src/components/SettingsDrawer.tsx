@@ -55,10 +55,17 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
     setMonthlyGoal(String(state.store.monthlyRevenueGoal));
     setCmvTarget(String(state.store.cmvTargetPct));
 
-    fetch("/api/takeat/status")
-      .then((r) => r.json())
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    fetch(`${basePath}/api/takeat/status`)
+      .then(async (r) => {
+        const ct = r.headers.get("content-type") || "";
+        if (!r.ok || !ct.includes("application/json")) {
+          return { mode: "demo", supabaseConfigured: false, connected: false };
+        }
+        return r.json();
+      })
       .then((d) => setServerStatus(d))
-      .catch(() => {});
+      .catch(() => setServerStatus({ mode: "demo", supabaseConfigured: false, connected: false }));
   }, [open, state.store]);
 
   if (!open) return null;

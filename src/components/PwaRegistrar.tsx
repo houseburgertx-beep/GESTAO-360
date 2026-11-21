@@ -5,7 +5,8 @@ import { useEffect } from "react";
 export function PwaRegistrar() {
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("/sw.js").catch(() => {
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    navigator.serviceWorker.register(`${basePath}/sw.js`).catch(() => {
       // Silencioso em ambientes onde SW não está disponível
     });
   }, []);

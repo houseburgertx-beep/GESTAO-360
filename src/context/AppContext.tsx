@@ -24,6 +24,32 @@ import {
 import { generateId } from "@/lib/utils";
 
 const STORAGE_KEY = "brassaops_state_v1";
+const API_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
+/**
+ * Executa chamadas ao BFF Takeat com fallback automático para simulação local
+ * quando o app estiver rodando em hospedagem estática (ex.: GitHub Pages).
+ */
+async function fetchTakeatWithStaticFallback<T>(
+  path: string,
+  init: RequestInit,
+  buildFallback: () => { ok: boolean; status: number; data: T }
+): Promise<{ ok: boolean; status: number; data: T }> {
+  try {
+    const res = await fetch(`${API_BASE_PATH}${path}`, init);
+    const contentType = res.headers.get("content-type") || "";
+    if (res.status === 404 || res.status === 405 || !contentType.includes("application/json")) {
+      return buildFallback();
+    }
+    const data = (await res.json()) as T;
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    if (err instanceof TypeError || err instanceof SyntaxError) {
+      return buildFallback();
+    }
+    throw err;
+  }
+}
 
 export interface ToastNotice {
   id: string;
@@ -219,8 +245,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async syncTakeatNow() {
       setIsSyncingTakeat(true);
       try {
-        const res = await fetch("/api/takeat/sync", { method: "POST" });
-        const data = (await res.json()) as {
+        type SyncResp = {
           ok: boolean;
           mode?: "demo" | "live";
           syncedAt?: string;
@@ -228,6 +253,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           error?: string;
           summary?: { inputsCount: number; intermediariesCount: number; nfesCount: number };
         };
+        const res = await fetchTakeatWithStaticFallback<SyncResp>(
+          "/api/takeat/sync",
+          { method: "POST" },
+          () => ({
+            ok: true,
+            status: 200,
+            data: {
+              ok: true,
+              mode: "demo",
+              syncedAt: new Date().toISOString(),
+              message: "Sincronização simulada concluída (modo demonstração estático).",
+              summary: {
+                inputsCount: state.inventory.filter((i) => i.kind === "input").length,
+                intermediariesCount: state.inventory.filter((i) => i.kind === "intermediary").length,
+                nfesCount: state.receivedNfes.length,
+              },
+            },
+          })
+        );
+        const data = res.data;
 
         if (!res.ok || !data.ok) {
           throw new Error(data.error || "Falha na sincronização Takeat");
@@ -286,16 +331,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         channel === "availableInDelivery" ? !target.availableInDelivery : target.availableInDelivery;
 
       try {
-        const res = await fetch("/api/takeat/availability", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            productId,
-            available: nextAvailable,
-            available_in_delivery: nextDelivery,
-          }),
-        });
-        if (!res.ok) throw new Error("Falha ao atualizar disponibilidade no Takeat.");
+        const res = await fetchTakeatWithStaticFallback<{ ok: boolean; error?: string }>(
+          "/api/takeat/availability",
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              productId,
+              available: nextAvailable,
+              available_in_delivery: nextDelivery,
+            }),
+          },
+          () => ({ ok: true, status: 200, data: { ok: true } })
+        );
+        if (!res.ok) throw new Error(res.data.error || "Falha ao atualizar disponibilidade no Takeat.");
 
         setState((prev) => ({
           ...prev,
@@ -531,28 +580,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const res = await fetch("/api/takeat/counts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            idempotencyKey,
-            reason: payload.reason,
-            countedAt,
-            simulateConflict409: payload.simulateConflict409,
-            items: itemsMeta.map((m) => ({
-              takeatId: m.inv.takeatId,
-              kind: m.inv.kind,
-              countedQty: m.entry.countedQty,
-              expectedStockVersion: m.inv.stockVersion,
-            })),
-          }),
-        });
-
-        const body = (await res.json()) as {
+        type CountsResp = {
           ok: boolean;
           isConflict409?: boolean;
           error?: string;
         };
+        const res = await fetchTakeatWithStaticFallback<CountsResp>(
+          "/api/takeat/counts",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              idempotencyKey,
+              reason: payload.reason,
+              countedAt,
+              simulateConflict409: payload.simulateConflict409,
+              items: itemsMeta.map((m) => ({
+                takeatId: m.inv.takeatId,
+                kind: m.inv.kind,
+                countedQty: m.entry.countedQty,
+                expectedStockVersion: m.inv.stockVersion,
+              })),
+            }),
+          },
+          () => {
+            if (payload.simulateConflict409) {
+              return {
+                ok: false,
+                status: 409,
+                data: {
+                  ok: false,
+                  isConflict409: true,
+                  error:
+                    "HTTP 409 (Simulação): Saldo mudou no Takeat durante a contagem (expected_stock_version expirado). Atualize o saldo antes de reenviar.",
+                },
+              };
+            }
+            return {
+              ok: true,
+              status: 200,
+              data: { ok: true },
+            };
+          }
+        );
+
+        const body = res.data;
 
         if (res.status === 409 || body.isConflict409) {
           const msg =

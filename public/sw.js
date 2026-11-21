@@ -1,5 +1,5 @@
-const CACHE_NAME = "brassaops-v1";
-const STATIC_ASSETS = ["/", "/manifest.json", "/icon.svg"];
+const CACHE_NAME = "brassaops-v2";
+const STATIC_ASSETS = ["./", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -31,15 +31,15 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || "BrassaOps · Alerta de Turno", {
       body: data.body || "Verifique suas tarefas prioritárias.",
-      icon: "/icon.svg",
-      badge: "/icon.svg",
+      icon: "./icon.svg",
+      badge: "./icon.svg",
       vibrate: [200, 100, 200],
-      data: data.url || "/",
+      data: data.url || "./",
     })
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(self.clients.openWindow(event.notification.data || "/"));
+  event.waitUntil(self.clients.openWindow(event.notification.data || "./"));
 });

@@ -2,7 +2,7 @@
   "name": "BrassaOps — Gestão de Hamburgueria",
   "short_name": "BrassaOps",
   "description": "Sistema mobile-first de gestão completa de hamburgueria conectado ao Takeat: rotinas, checklists 5S, estoque, desperdício, compras, manutenção, ocorrências, planos 5W2H, CMV e faturamento.",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#141416",
@@ -11,7 +11,7 @@
   "categories": ["business", "food", "productivity"],
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
